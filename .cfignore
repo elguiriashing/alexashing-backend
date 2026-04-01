@@ -1,0 +1,12 @@
+# Exclude from Cloudflare Pages deployment
+node_modules/
+.git/
+package-lock.json
+server.js
+railway.json
+DEPLOYMENT.md
+EMAILJS_TEMPLATE.md
+T1 - EmailJS.html
+*.md
+.env*
+wrangler.jsonc
