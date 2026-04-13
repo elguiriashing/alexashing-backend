@@ -93,6 +93,9 @@ router.options('/auth', (req, res) => {
 });
 
 router.post('/auth', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
   const { password } = req.body;
   if (password === APEX_PASSWORD) {
     res.json({ success: true, token: APEX_PASSWORD });
