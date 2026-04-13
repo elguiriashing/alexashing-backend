@@ -5,14 +5,9 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// Password protection middleware
-const APEX_PASSWORD = process.env.APEX_PASSWORD || 'apex2024';
-
+// Password protection middleware - disabled for now
 const requireAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || authHeader !== `Bearer ${APEX_PASSWORD}`) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  // Auth disabled - allow all requests
   next();
 };
 
@@ -83,14 +78,14 @@ const ApexGamification = mongoose.model('ApexGamification', ApexGamificationSche
 
 // Routes
 
-// Auth check
+// Auth check - disabled for now, auto-accept
 router.post('/auth', (req, res) => {
-  const { password } = req.body;
-  if (password === APEX_PASSWORD) {
-    res.json({ success: true, token: APEX_PASSWORD });
-  } else {
-    res.status(401).json({ success: false, error: 'Invalid password' });
-  }
+  res.json({ success: true, token: 'no-password-required' });
+});
+
+// Verify token - disabled, always valid
+router.get('/verify', (req, res) => {
+  res.json({ valid: true });
 });
 
 // Get all data (bulk fetch for app init)
