@@ -19,6 +19,15 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
+// CORS preflight - handle OPTIONS before all middleware
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || 'https://alexashing.com');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
+
 // Middleware
 app.use(cors({
   origin: ['https://alexashing.com', 'https://www.alexashing.com', 'http://localhost:3000', 'http://localhost:5173'],
