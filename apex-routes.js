@@ -124,6 +124,80 @@ router.get('/data', requireAuth, async (req, res) => {
   }
 });
 
+// Save all data (bulk save)
+router.post('/data', requireAuth, async (req, res) => {
+  try {
+    const { settings, schedule, tasks, habits, reflections, gamification } = req.body;
+
+    // Save settings
+    if (settings) {
+      await ApexSettings.findOneAndUpdate(
+        {},
+        { ...settings, updatedAt: Date.now() },
+        { upsert: true, new: true }
+      );
+    }
+
+    // Save schedule
+    if (schedule) {
+      await ApexSchedule.findOneAndUpdate(
+        { weekKey: schedule.weekKey },
+        { schedule: schedule.schedule, updatedAt: Date.now() },
+        { upsert: true, new: true }
+      );
+    }
+
+    // Save tasks - replace all
+    if (tasks && Array.isArray(tasks)) {
+      await ApexTask.deleteMany({});
+      if (tasks.length > 0) {
+        await ApexTask.insertMany(tasks.map(t => ({ ...t, updatedAt: Date.now() })));
+      }
+    }
+
+    // Save habits - replace all
+    if (habits && typeof habits === 'object') {
+      await ApexHabit.deleteMany({});
+      const habitEntries = Object.entries(habits)
+        .filter(([key, value]) => value === true)
+        .map(([key]) => ({ key, updatedAt: Date.now() }));
+      if (habitEntries.length > 0) {
+        await ApexHabit.insertMany(habitEntries);
+      }
+    }
+
+    // Save reflections - replace all
+    if (reflections && typeof reflections === 'object') {
+      await ApexReflection.deleteMany({});
+      const reflectionEntries = [];
+      Object.entries(reflections).forEach(([weekKey, weekReflections]) => {
+        Object.entries(weekReflections).forEach(([index, value]) => {
+          if (value) {
+            reflectionEntries.push({ weekKey, index, value, updatedAt: Date.now() });
+          }
+        });
+      });
+      if (reflectionEntries.length > 0) {
+        await ApexReflection.insertMany(reflectionEntries);
+      }
+    }
+
+    // Save gamification
+    if (gamification) {
+      await ApexGamification.findOneAndUpdate(
+        {},
+        { ...gamification, updatedAt: Date.now() },
+        { upsert: true, new: true }
+      );
+    }
+
+    res.json({ success: true, message: 'Data saved' });
+  } catch (error) {
+    console.error('Bulk save error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Settings
 router.get('/settings', requireAuth, async (req, res) => {
   try {
