@@ -70,6 +70,9 @@ const Message = mongoose.model('Message', messageSchema);
 const Event = mongoose.model('Event', eventSchema);
 const Portfolio = mongoose.model('Portfolio', portfolioSchema);
 
+// APEX Scheduler Routes
+const { router: apexRouter } = require('./apex-routes');
+
 // Configure Multer for file uploads
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
@@ -244,6 +247,9 @@ app.delete('/api/portfolio/:id', async (req, res) => {
   }
 });
 
+// APEX Scheduler API Routes
+app.use('/api/apex', apexRouter);
+
 // Serve static files (your HTML pages)
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
@@ -261,4 +267,5 @@ app.listen(PORT, () => {
   console.log(`📧 EmailJS configured for contact forms`);
   console.log(`☁️ Cloudinary configured for image uploads`);
   console.log(`🗄️ MongoDB Atlas connected successfully`);
+  console.log(`📅 APEX Scheduler API available at /api/apex`);
 });
