@@ -26,6 +26,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+// Enable preflight for all routes
+app.options('*', cors());
 app.use(express.json());
 // Note: Static serving removed - frontend deployed separately
 
