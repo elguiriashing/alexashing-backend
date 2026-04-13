@@ -84,6 +84,14 @@ const ApexGamification = mongoose.model('ApexGamification', ApexGamificationSche
 // Routes
 
 // Auth check
+router.options('/auth', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
+
 router.post('/auth', (req, res) => {
   const { password } = req.body;
   if (password === APEX_PASSWORD) {
