@@ -19,14 +19,39 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Middleware
-app.use(cors({
-  origin: ['https://alexashing.com', 'https://www.alexashing.com', 'http://localhost:3000', 'http://localhost:5173'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  preflightContinue: false
-}));
+// CORS — add comma-separated origins in ALLOWED_ORIGINS (e.g. Cloudflare Pages preview URLs)
+const defaultOrigins = [
+  'https://alexashing.com',
+  'https://www.alexashing.com',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+];
+const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const allowedOrigins = [...defaultOrigins, ...extraOrigins];
+
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      try {
+        if (/\.alexashing\.com$/i.test(new URL(origin).hostname)) return cb(null, true);
+      } catch {
+        return cb(null, false);
+      }
+      return cb(null, false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    optionsSuccessStatus: 204,
+  })
+);
 app.use(express.json());
 // Note: Static serving removed - frontend deployed separately
 

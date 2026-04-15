@@ -76,6 +76,13 @@ const ApexHabit = mongoose.model('ApexHabit', ApexHabitSchema);
 const ApexReflection = mongoose.model('ApexReflection', ApexReflectionSchema);
 const ApexGamification = mongoose.model('ApexGamification', ApexGamificationSchema);
 
+// Habit document keys from the client look like: "2026-W15-0-workout" → weekKey, dayIndex, habitId
+function parseHabitStorageKey(key) {
+  const m = String(key).match(/^(\d{4}-W\d{2})-(\d+)-(.+)$/);
+  if (!m) return null;
+  return { weekKey: m[1], dayIndex: parseInt(m[2], 10), habitId: m[3] };
+}
+
 // Routes
 
 // Auth check - disabled for now, auto-accept
@@ -159,8 +166,20 @@ router.post('/data', requireAuth, async (req, res) => {
     if (habits && typeof habits === 'object') {
       await ApexHabit.deleteMany({});
       const habitEntries = Object.entries(habits)
-        .filter(([key, value]) => value === true)
-        .map(([key]) => ({ key, updatedAt: Date.now() }));
+        .filter(([, value]) => value === true)
+        .map(([key]) => {
+          const parsed = parseHabitStorageKey(key);
+          if (!parsed) return null;
+          return {
+            key,
+            weekKey: parsed.weekKey,
+            dayIndex: parsed.dayIndex,
+            habitId: parsed.habitId,
+            completed: true,
+            createdAt: Date.now(),
+          };
+        })
+        .filter(Boolean);
       if (habitEntries.length > 0) {
         await ApexHabit.insertMany(habitEntries);
       }
@@ -331,6 +350,47 @@ router.post('/gamification', requireAuth, async (req, res) => {
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Telegram HTTP proxy (browser cannot call api.telegram.org — no CORS)
+router.post('/telegram/sendMessage', requireAuth, async (req, res) => {
+  try {
+    const { token, chat_id, text, parse_mode } = req.body;
+    if (!token || chat_id == null || text == null) {
+      return res.status(400).json({ ok: false, error: 'token, chat_id, and text are required' });
+    }
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id,
+        text,
+        parse_mode: parse_mode || 'Markdown',
+      }),
+    });
+    const data = await r.json().catch(() => ({ ok: false, description: 'Invalid JSON from Telegram' }));
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+router.post('/telegram/getUpdates', requireAuth, async (req, res) => {
+  try {
+    const { token, offset, limit } = req.body;
+    if (!token) {
+      return res.status(400).json({ ok: false, error: 'token is required' });
+    }
+    const qs = new URLSearchParams({
+      offset: String(offset ?? 0),
+      limit: String(limit ?? 10),
+    });
+    const r = await fetch(`https://api.telegram.org/bot${token}/getUpdates?${qs}`);
+    const data = await r.json().catch(() => ({ ok: false, description: 'Invalid JSON from Telegram' }));
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
