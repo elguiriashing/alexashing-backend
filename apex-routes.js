@@ -408,6 +408,216 @@ router.post('/telegram/getUpdates', requireAuth, async (req, res) => {
   }
 });
 
+// Helper: Send Telegram message
+async function sendTelegramMessage(token, chatId, text, parse_mode = 'Markdown') {
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode }),
+    });
+    return await r.json();
+  } catch (error) {
+    console.error('Telegram send error:', error);
+    return { ok: false, error: error.message };
+  }
+}
+
+// Helper: Get today's day name
+function getTodayDayName() {
+  const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  return days[new Date().getDay()];
+}
+
+// Helper: Get current week key
+function getCurrentWeekKey() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const week = Math.floor((now - new Date(year, 0, 1)) / (7 * 24 * 60 * 60 * 1000)) + 1;
+  return `${year}-W${String(week).padStart(2, '0')}`;
+}
+
+// Helper: Find next activity from schedule
+async function getNextActivity() {
+  try {
+    const schedule = await ApexSchedule.findOne().sort({ createdAt: -1 });
+    if (!schedule || !schedule.schedule) return null;
+    
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMin = now.getMinutes();
+    const dayIndex = now.getDay(); // 0-6
+    
+    // Get today's schedule
+    const todaySchedule = schedule.schedule[dayIndex];
+    if (!todaySchedule) return null;
+    
+    // Find next activity
+    for (const block of todaySchedule) {
+      if (!block || block.activity === 'sleep') continue;
+      
+      const [startHour, startMin] = block.start.split(':').map(Number);
+      const blockTime = startHour * 60 + startMin;
+      const currentTime = currentHour * 60 + currentMin;
+      
+      // If activity starts in the future (more than 10 mins from now)
+      if (blockTime > currentTime + 10) {
+        return {
+          activity: block.activity,
+          start: block.start,
+          end: block.end,
+          minutesUntil: blockTime - currentTime
+        };
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting next activity:', error);
+    return null;
+  }
+}
+
+// Scheduled reminder checker (runs every minute)
+let reminderInterval = null;
+function startReminderScheduler() {
+  if (reminderInterval) clearInterval(reminderInterval);
+  
+  reminderInterval = setInterval(async () => {
+    const settings = await ApexSettings.findOne();
+    if (!settings?.botToken || !settings?.chatId) return;
+    
+    const now = new Date();
+    const currentMin = now.getMinutes();
+    
+    // Check every hour at :50 minutes (10 mins before next hour)
+    if (currentMin === 50) {
+      const nextActivity = await getNextActivity();
+      if (nextActivity && nextActivity.minutesUntil <= 10 && nextActivity.activity !== 'sleep') {
+        const emoji = { work: '💼', workout: '💪', learn: '📚', rest: '☕', meal: '🍽️' }[nextActivity.activity] || '⏰';
+        await sendTelegramMessage(
+          settings.botToken,
+          settings.chatId,
+          `${emoji} *Up next in 10 minutes:*\n\n${nextActivity.activity.toUpperCase()}\n⏰ ${nextActivity.start} - ${nextActivity.end}`,
+          'Markdown'
+        );
+      }
+    }
+  }, 60000); // Check every minute
+}
+
+// Start the scheduler when module loads
+startReminderScheduler();
+
+// Telegram command handlers
+const telegramCommands = {
+  async tasks(args, settings) {
+    const tasks = await ApexTask.find({ done: false }).sort({ createdAt: -1 }).limit(10);
+    if (tasks.length === 0) {
+      return '🎉 No pending tasks! Great job!';
+    }
+    
+    let text = '📝 *Your Pending Tasks:*\n\n';
+    tasks.forEach((task, i) => {
+      const priority = task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢';
+      text += `${i + 1}. ${priority} ${task.text}\n   \`/done ${task.id}\`\n\n`;
+    });
+    text += `\nTotal: ${tasks.length} tasks pending`;
+    return text;
+  },
+  
+  async done(args, settings) {
+    const taskId = args[0];
+    if (!taskId) return '❌ Usage: `/done <task-id>`';
+    
+    const task = await ApexTask.findOneAndUpdate(
+      { id: taskId },
+      { done: true, completedAt: new Date() },
+      { new: true }
+    );
+    
+    if (!task) return '❌ Task not found';
+    return `✅ Completed: *${task.text}*`;
+  },
+  
+  async add(args, settings) {
+    const text = args.join(' ');
+    if (!text) return '❌ Usage: `/add <task description>`';
+    
+    const task = new ApexTask({
+      id: `task-${Date.now()}`,
+      text,
+      priority: 'medium',
+      day: 'any',
+      category: 'techWork',
+      done: false,
+      createdAt: new Date()
+    });
+    await task.save();
+    return `✅ Added: *${text}*`;
+  },
+  
+  async report(args, settings) {
+    const period = args[0] || 'today';
+    const now = new Date();
+    const weekKey = getCurrentWeekKey();
+    
+    // Get tasks completed today
+    const startOfDay = new Date(now.setHours(0, 0, 0, 0));
+    const endOfDay = new Date(now.setHours(23, 59, 59, 999));
+    
+    const completedToday = await ApexTask.countDocuments({
+      done: true,
+      completedAt: { $gte: startOfDay, $lte: endOfDay }
+    });
+    
+    const pending = await ApexTask.countDocuments({ done: false });
+    
+    // Get habits for today
+    const dayIndex = new Date().getDay();
+    const habits = await ApexHabit.countDocuments({ weekKey, dayIndex });
+    
+    // Get gamification
+    const gamification = await ApexGamification.findOne().sort({ updatedAt: -1 }) || {};
+    
+    let text = `📊 *Daily Report*\n\n`;
+    text += `✅ Tasks completed: ${completedToday}\n`;
+    text += `📝 Tasks pending: ${pending}\n`;
+    text += `🎯 Habits tracked: ${habits}\n`;
+    text += `⭐ XP: ${gamification.xp || 0} (Level ${gamification.level || 1})\n\n`;
+    text += `Keep crushing it! 💪`;
+    
+    return text;
+  },
+  
+  async schedule(args, settings) {
+    const schedule = await ApexSchedule.findOne().sort({ createdAt: -1 });
+    if (!schedule || !schedule.schedule) return 'No schedule found';
+    
+    const dayIndex = new Date().getDay();
+    const todaySchedule = schedule.schedule[dayIndex];
+    if (!todaySchedule) return 'No schedule for today';
+    
+    let text = '📅 *Today\'s Schedule:*\n\n';
+    todaySchedule.forEach(block => {
+      if (!block) return;
+      const emoji = { sleep: '😴', work: '💼', workout: '💪', learn: '📚', rest: '☕', meal: '🍽️' }[block.activity] || '⏰';
+      text += `${emoji} ${block.start}-${block.end}: ${block.activity.toUpperCase()}\n`;
+    });
+    return text;
+  },
+  
+  async help(args, settings) {
+    return `🤖 *APEX Bot Commands:*
+
+📝 /tasks - List pending tasks
+✅ /done <id> - Complete a task
+➕ /add <text> - Add new task
+📊 /report - Daily summary
+📅 /schedule - Today's schedule
+❓ /help - Show this help`;
+  }
+};
+
 // Telegram bot webhook
 router.post('/telegram-webhook', async (req, res) => {
   try {
@@ -416,18 +626,39 @@ router.post('/telegram-webhook', async (req, res) => {
       return res.json({ ok: true });
     }
     
+    const chatId = message.chat?.id;
+    const text = message.text;
+    
     // Store chatId if first message
-    if (message.chat && message.chat.id) {
+    if (chatId) {
       await ApexSettings.findOneAndUpdate(
         {},
-        { chatId: String(message.chat.id) },
+        { chatId: String(chatId) },
         { upsert: true }
       );
     }
     
-    // Return success - actual command handling happens in frontend polling
+    // Parse command
+    const parts = text.split(' ');
+    const commandName = parts[0].replace('/', '').split('@')[0]; // Remove / and bot name
+    const args = parts.slice(1);
+    
+    // Get settings for bot token
+    const settings = await ApexSettings.findOne();
+    if (!settings?.botToken) {
+      return res.json({ ok: true });
+    }
+    
+    // Execute command
+    const handler = telegramCommands[commandName] || telegramCommands.help;
+    const response = await handler(args, settings);
+    
+    // Send response
+    await sendTelegramMessage(settings.botToken, chatId, response);
+    
     res.json({ ok: true });
   } catch (error) {
+    console.error('Telegram webhook error:', error);
     res.status(500).json({ error: error.message });
   }
 });
