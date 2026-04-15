@@ -108,7 +108,7 @@ router.get('/data', requireAuth, async (req, res) => {
     // Convert habits array to object format
     const habitsObj = {};
     habits.forEach(h => {
-      habitsObj[h.key] = true;
+      habitsObj[h.key] = h.completed !== false;
     });
 
     // Convert reflections array to object format
@@ -158,7 +158,17 @@ router.post('/data', requireAuth, async (req, res) => {
     if (tasks && Array.isArray(tasks)) {
       await ApexTask.deleteMany({});
       if (tasks.length > 0) {
-        await ApexTask.insertMany(tasks.map(t => ({ ...t, updatedAt: Date.now() })));
+        await ApexTask.insertMany(tasks.map((t) => ({
+          id: t.id,
+          text: t.text,
+          note: t.note || '',
+          priority: t.priority || 'medium',
+          day: t.day || 'any',
+          category: t.category || 'techWork',
+          done: !!t.done,
+          createdAt: t.createdAt || t.created || Date.now(),
+          completedAt: t.done ? (t.completedAt || Date.now()) : null,
+        })));
       }
     }
 
@@ -303,6 +313,10 @@ router.delete('/tasks/:id', requireAuth, async (req, res) => {
 router.post('/habits', requireAuth, async (req, res) => {
   try {
     const { key, weekKey, dayIndex, habitId, completed } = req.body;
+    if (completed === false) {
+      await ApexHabit.deleteOne({ key });
+      return res.json({ success: true, key, completed: false });
+    }
     const habit = await ApexHabit.findOneAndUpdate(
       { key },
       { key, weekKey, dayIndex, habitId, completed, createdAt: Date.now() },
