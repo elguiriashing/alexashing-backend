@@ -477,6 +477,89 @@ async function getNextActivity() {
   }
 }
 
+// Track sent reminders to avoid duplicates
+const sentReminders = new Set();
+const sentMorningBriefs = new Set();
+
+// Helper: Get shift info for today
+async function getTodayShift(settings) {
+  if (!settings?.shifts) return null;
+  const dayIndex = new Date().getDay();
+  const shiftType = settings.shifts[dayIndex];
+  if (!shiftType || shiftType === 'none') return null;
+  
+  // Shift times based on shift type
+  const shiftTimes = {
+    'early': { start: '06:00', name: 'Early Shift' },
+    'day': { start: '09:00', name: 'Day Shift' },
+    'late': { start: '14:00', name: 'Late Shift' },
+    'night': { start: '22:00', name: 'Night Shift' }
+  };
+  
+  return shiftTimes[shiftType] || null;
+}
+
+// Helper: Send morning brief
+async function sendMorningBrief(settings) {
+  const chatId = settings.chatId;
+  const token = settings.botToken;
+  
+  // Get today's schedule
+  const schedule = await ApexSchedule.findOne().sort({ createdAt: -1 });
+  const dayIndex = new Date().getDay();
+  const todaySchedule = schedule?.schedule?.[dayIndex] || [];
+  
+  // Get pending tasks
+  const pendingTasks = await ApexTask.find({ done: false }).sort({ priority: -1 }).limit(5);
+  
+  // Get shift info
+  const shift = await getTodayShift(settings);
+  
+  // Build brief
+  let text = `🌅 *Good Morning! Here's your daily brief:*\n\n`;
+  
+  // Schedule
+  text += `📅 *Today's Schedule:*\n`;
+  if (todaySchedule.length > 0) {
+    todaySchedule.forEach(block => {
+      if (!block) return;
+      const emoji = { sleep: '😴', work: '💼', workout: '💪', learn: '📚', rest: '☕', meal: '🍽️' }[block.activity] || '⏰';
+      text += `${emoji} ${block.start}-${block.end}: ${block.activity.toUpperCase()}\n`;
+    });
+  } else {
+    text += `No schedule set for today\n`;
+  }
+  
+  // Shift reminder
+  if (shift) {
+    text += `\n💼 *Shift Today:* ${shift.name} at ${shift.start}\n`;
+  }
+  
+  // Tasks
+  text += `\n📝 *Top Tasks:*\n`;
+  if (pendingTasks.length > 0) {
+    pendingTasks.forEach((task, i) => {
+      const priority = task.priority === 'high' ? '🔴' : task.priority === 'medium' ? '🟡' : '🟢';
+      text += `${i + 1}. ${priority} ${task.text}\n`;
+    });
+    const moreTasks = await ApexTask.countDocuments({ done: false }) - pendingTasks.length;
+    if (moreTasks > 0) {
+      text += `_...and ${moreTasks} more_\n`;
+    }
+  } else {
+    text += `🎉 No pending tasks!\n`;
+  }
+  
+  // Habits
+  const weekKey = getCurrentWeekKey();
+  const habitsToday = await ApexHabit.countDocuments({ weekKey, dayIndex });
+  text += `\n🎯 *Habits today:* ${habitsToday} tracked\n`;
+  
+  text += `\n💪 *Have a productive day!* 🚀`;
+  
+  await sendTelegramMessage(token, chatId, text, 'Markdown');
+}
+
 // Scheduled reminder checker (runs every minute)
 let reminderInterval = null;
 function startReminderScheduler() {
@@ -487,9 +570,12 @@ function startReminderScheduler() {
     if (!settings?.botToken || !settings?.chatId) return;
     
     const now = new Date();
+    const currentHour = now.getHours();
     const currentMin = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMin;
+    const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
     
-    // Check every hour at :50 minutes (10 mins before next hour)
+    // 1. Activity reminders - every hour at :50 (10 mins before)
     if (currentMin === 50) {
       const nextActivity = await getNextActivity();
       if (nextActivity && nextActivity.minutesUntil <= 10 && nextActivity.activity !== 'sleep') {
@@ -502,6 +588,56 @@ function startReminderScheduler() {
         );
       }
     }
+    
+    // 2. Shift reminders - 30 mins before shift starts
+    const shift = await getTodayShift(settings);
+    if (shift) {
+      const [shiftHour, shiftMin] = shift.start.split(':').map(Number);
+      const shiftTime = shiftHour * 60 + shiftMin;
+      const minsToShift = shiftTime - currentTime;
+      const reminderKey = `shift-${todayKey}`;
+      
+      // Send reminder exactly 30 mins before
+      if (minsToShift === 30 && !sentReminders.has(reminderKey)) {
+        await sendTelegramMessage(
+          settings.botToken,
+          settings.chatId,
+          `💼 *Shift Reminder*\n\nYour ${shift.name} starts in 30 minutes!\n⏰ Start time: ${shift.start}\n\nGet ready! 🚀`,
+          'Markdown'
+        );
+        sentReminders.add(reminderKey);
+      }
+    }
+    
+    // 3. Morning brief - when sleep ends (first non-sleep activity or 8 AM)
+    const briefKey = `brief-${todayKey}`;
+    if (!sentMorningBriefs.has(briefKey)) {
+      const schedule = await ApexSchedule.findOne().sort({ createdAt: -1 });
+      const todaySchedule = schedule?.schedule?.[dayIndex] || [];
+      
+      // Find when sleep ends (first non-sleep activity or default 8 AM)
+      let wakeUpTime = 8 * 60; // Default 8:00 AM
+      for (const block of todaySchedule) {
+        if (block && block.activity !== 'sleep') {
+          const [hour, min] = block.start.split(':').map(Number);
+          wakeUpTime = hour * 60 + min;
+          break;
+        }
+      }
+      
+      // Send brief at wake up time or 8 AM (whichever is later, but before 10 AM)
+      if (currentTime === Math.min(wakeUpTime, 10 * 60) && currentHour >= 6) {
+        await sendMorningBrief(settings);
+        sentMorningBriefs.add(briefKey);
+      }
+    }
+    
+    // Cleanup old reminders at midnight
+    if (currentHour === 0 && currentMin === 0) {
+      sentReminders.clear();
+      sentMorningBriefs.clear();
+    }
+    
   }, 60000); // Check every minute
 }
 
