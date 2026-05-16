@@ -1,6 +1,9 @@
 {
   "name": "alexashing-portfolio-backend",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "description": "Alex Ashing Portfolio Backend API",
   "main": "server.js",
   "scripts": {
