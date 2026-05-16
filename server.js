@@ -7,6 +7,9 @@ const cors = require('cors');
 const path = require('path');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const axios = require('axios');
+const cheerio = require('cheerio');
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const app = express();
@@ -22,6 +25,15 @@ cloudinary.config({
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Admin Auth Middleware
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || authHeader !== '!Magnetix1!') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+};
 // Note: Static serving removed - frontend deployed separately
 
 // MongoDB Connection
@@ -90,7 +102,7 @@ app.post('/api/contact', async (req, res) => {
 });
 
 // Get Messages for Admin
-app.get('/api/messages', async (req, res) => {
+app.get('/api/messages', authMiddleware, async (req, res) => {
   try {
     const messages = await Message.find().sort({ createdAt: -1 });
     res.json(messages);
@@ -100,7 +112,7 @@ app.get('/api/messages', async (req, res) => {
 });
 
 // Update Message Status
-app.put('/api/messages/:id', async (req, res) => {
+app.put('/api/messages/:id', authMiddleware, async (req, res) => {
   try {
     const message = await Message.findByIdAndUpdate(
       req.params.id,
@@ -114,7 +126,7 @@ app.put('/api/messages/:id', async (req, res) => {
 });
 
 // Delete Message
-app.delete('/api/messages/:id', async (req, res) => {
+app.delete('/api/messages/:id', authMiddleware, async (req, res) => {
   try {
     await Message.findByIdAndDelete(req.params.id);
     res.json({ success: true });
@@ -133,7 +145,7 @@ app.get('/api/events', async (req, res) => {
   }
 });
 
-app.post('/api/events', async (req, res) => {
+app.post('/api/events', authMiddleware, async (req, res) => {
   try {
     const event = new Event(req.body);
     await event.save();
@@ -144,7 +156,7 @@ app.post('/api/events', async (req, res) => {
   }
 });
 
-app.put('/api/events/:id', async (req, res) => {
+app.put('/api/events/:id', authMiddleware, async (req, res) => {
   try {
     const event = await Event.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(event);
@@ -153,7 +165,7 @@ app.put('/api/events/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/events/:id', async (req, res) => {
+app.delete('/api/events/:id', authMiddleware, async (req, res) => {
   try {
     await Event.findByIdAndDelete(req.params.id);
     res.json({ success: true });
@@ -173,7 +185,7 @@ app.get('/api/portfolio', async (req, res) => {
 });
 
 // Upload Portfolio Item with Cloudinary
-app.post('/api/portfolio', upload.single('image'), async (req, res) => {
+app.post('/api/portfolio', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
@@ -218,7 +230,7 @@ app.post('/api/portfolio', upload.single('image'), async (req, res) => {
   }
 });
 
-app.put('/api/portfolio/:id', async (req, res) => {
+app.put('/api/portfolio/:id', authMiddleware, async (req, res) => {
   try {
     const portfolio = await Portfolio.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(portfolio);
@@ -227,7 +239,7 @@ app.put('/api/portfolio/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/portfolio/:id', async (req, res) => {
+app.delete('/api/portfolio/:id', authMiddleware, async (req, res) => {
   try {
     const item = await Portfolio.findByIdAndDelete(req.params.id);
     if (item && item.cloudinaryPublicId) {
@@ -241,6 +253,103 @@ app.delete('/api/portfolio/:id', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Outreach Scraping Endpoint
+app.post('/api/outreach/scrape', authMiddleware, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL is required' });
+    
+    // Add http:// if missing
+    let targetUrl = url;
+    if (!/^https?:\/\//i.test(url)) {
+      targetUrl = 'https://' + url;
+    }
+
+    const response = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      },
+      timeout: 10000 // 10 second timeout
+    });
+    
+    const html = response.data;
+    const $ = cheerio.load(html);
+    
+    // Scrape emails
+    const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi;
+    const rawEmails = html.match(emailRegex) || [];
+    const emails = [...new Set(rawEmails)].filter(e => !e.endsWith('.png') && !e.endsWith('.jpg') && !e.endsWith('.webp'));
+    
+    // Scrape basic phone numbers
+    const phoneRegex = /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
+    const rawPhones = html.match(phoneRegex) || [];
+    const phones = [...new Set(rawPhones)].filter(p => p.length >= 10);
+    
+    // Extract title and description
+    const title = $('title').text().trim() || '';
+    const description = $('meta[name="description"]').attr('content') || '';
+    
+    // Extract social links
+    const socialLinks = [];
+    $('a').each((i, el) => {
+      const href = $(el).attr('href');
+      if (href && (href.includes('instagram.com') || href.includes('linkedin.com') || href.includes('twitter.com') || href.includes('facebook.com'))) {
+        socialLinks.push(href);
+      }
+    });
+    const uniqueSocials = [...new Set(socialLinks)];
+
+    res.json({
+      success: true,
+      data: {
+        url: targetUrl,
+        title,
+        description,
+        emails,
+        phones,
+        socials: uniqueSocials
+      }
+    });
+  } catch (error) {
+    console.error('Scrape error:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to scrape URL. ' + error.message });
+  }
+});
+
+// Email Sending Endpoint
+app.post('/api/email/send', authMiddleware, async (req, res) => {
+  try {
+    const { to, subject, text } = req.body;
+    if (!to || !subject || !text) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Configure nodemailer with Gmail or standard SMTP
+    // You'll need to set SMTP_USER and SMTP_PASS in your .env
+    const transporter = nodemailer.createTransport({
+      service: 'gmail', // Fallback to gmail for simplicity if custom SMTP isn't setup
+      auth: {
+        user: process.env.SMTP_USER || 'your-email@gmail.com',
+        pass: process.env.SMTP_PASS || 'your-app-password'
+      }
+    });
+
+    const mailOptions = {
+      from: process.env.SMTP_USER || 'your-email@gmail.com',
+      to,
+      subject,
+      text
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Email sent:', info.response);
+    res.json({ success: true, message: 'Email sent successfully' });
+  } catch (error) {
+    console.error('❌ Email send error:', error);
+    res.status(500).json({ success: false, error: 'Failed to send email. ' + error.message });
   }
 });
 
