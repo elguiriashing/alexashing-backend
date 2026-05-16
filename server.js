@@ -327,7 +327,11 @@ app.post('/api/outreach/search', authMiddleware, async (req, res) => {
     `;
 
     const response = await axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(overpassQuery)}`, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'User-Agent': 'ASHING-CRM-App/1.0 (contact@alexashing.com)'
+      },
       timeout: 15000
     });
 
