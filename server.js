@@ -78,9 +78,21 @@ const portfolioSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+const leadSchema = new mongoose.Schema({
+  businessName: { type: String, required: true },
+  website: String,
+  emails: [String],
+  phones: [String],
+  location: String,
+  socials: [String],
+  status: { type: String, default: 'scraped' }, // scraped, contacted, replied, closed
+  createdAt: { type: Date, default: Date.now }
+});
+
 const Message = mongoose.model('Message', messageSchema);
 const Event = mongoose.model('Event', eventSchema);
 const Portfolio = mongoose.model('Portfolio', portfolioSchema);
+const Lead = mongoose.model('Lead', leadSchema);
 
 // Configure Multer for file uploads
 const storage = multer.memoryStorage();
@@ -129,6 +141,44 @@ app.put('/api/messages/:id', authMiddleware, async (req, res) => {
 app.delete('/api/messages/:id', authMiddleware, async (req, res) => {
   try {
     await Message.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Leads Management (CRM)
+app.get('/api/leads', authMiddleware, async (req, res) => {
+  try {
+    const leads = await Lead.find().sort({ createdAt: -1 });
+    res.json(leads);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/leads', authMiddleware, async (req, res) => {
+  try {
+    const lead = new Lead(req.body);
+    await lead.save();
+    res.json(lead);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/leads/:id', authMiddleware, async (req, res) => {
+  try {
+    const lead = await Lead.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(lead);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/leads/:id', authMiddleware, async (req, res) => {
+  try {
+    await Lead.findByIdAndDelete(req.params.id);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -256,6 +306,53 @@ app.delete('/api/portfolio/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// Outreach Business Search Endpoint (OpenStreetMap Overpass API)
+app.post('/api/outreach/search', authMiddleware, async (req, res) => {
+  try {
+    const { type, location } = req.body;
+    if (!type || !location) return res.status(400).json({ error: 'Type and location are required' });
+
+    // OpenStreetMap Overpass Query
+    // Search for amenities, leisure, tourism, or names matching the type in the specific location
+    const overpassQuery = `
+      [out:json][timeout:25];
+      area["name"~"${location}",i]->.searchArea;
+      (
+        nwr["amenity"~"${type}",i](area.searchArea);
+        nwr["leisure"~"${type}",i](area.searchArea);
+        nwr["tourism"~"${type}",i](area.searchArea);
+        nwr["name"~"${type}",i](area.searchArea);
+      );
+      out center 30;
+    `;
+
+    const response = await axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(overpassQuery)}`, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 15000
+    });
+
+    const results = [];
+    if (response.data && response.data.elements) {
+      response.data.elements.forEach(el => {
+        if (el.tags && el.tags.name) {
+          results.push({
+            name: el.tags.name,
+            website: el.tags.website || el.tags['contact:website'] || '',
+            phone: el.tags.phone || el.tags['contact:phone'] || '',
+            address: el.tags['addr:street'] ? `${el.tags['addr:street']} ${el.tags['addr:housenumber'] || ''}` : '',
+            type: el.tags.amenity || el.tags.leisure || el.tags.tourism || type
+          });
+        }
+      });
+    }
+
+    res.json({ success: true, data: results });
+  } catch (error) {
+    console.error('Search error:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to search area. ' + error.message });
+  }
+});
+
 // Outreach Scraping Endpoint
 app.post('/api/outreach/scrape', authMiddleware, async (req, res) => {
   try {
@@ -327,10 +424,12 @@ app.post('/api/email/send', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Configure nodemailer with Gmail or standard SMTP
-    // You'll need to set SMTP_USER and SMTP_PASS in your .env
+    // Configure nodemailer with IPv4 explicitly to fix ENETUNREACH on Railway
     const transporter = nodemailer.createTransport({
-      service: 'gmail', // Fallback to gmail for simplicity if custom SMTP isn't setup
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
+      family: 4, // force IPv4
       auth: {
         user: process.env.SMTP_USER || 'your-email@gmail.com',
         pass: process.env.SMTP_PASS || 'your-app-password'
